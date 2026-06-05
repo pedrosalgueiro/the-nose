@@ -1,0 +1,135 @@
+esphome:
+  name: voc-sensor
+  friendly_name: voc sensor
+
+mqtt:
+  broker: 10.0.0.2
+  port: 1883
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: "A_TUA_REDE"
+  password: "A_TUA_PASSWORD"
+
+captive_portal:
+
+i2c:
+  - id: bus_a
+    sda: GPIO21
+    scl: GPIO22
+    frequency: 50000Hz
+    scan: true
+
+  - id: bus_b
+    sda: GPIO16
+    scl: GPIO17
+    frequency: 50000Hz
+    scan: true
+
+ads1115:
+  - address: 0x48
+    i2c_id: bus_a
+
+bme68x_bsec2_i2c:
+  id: bme688_bsec
+  address: 0x77
+  model: bme688
+  operating_age: 4d
+  sample_rate: LP
+  supply_voltage: 3.3V
+  i2c_id: bus_b
+
+sensor:
+  - platform: sgp4x
+    i2c_id: bus_a
+    voc:
+      name: "VOC Index"
+      id: sgp41_voc_index
+    nox:
+      name: "NOx Index"
+      id: sgp41_nox_index
+    compensation:
+      temperature_source: sht40_temperature
+      humidity_source: sht40_humidity
+    update_interval: 5s
+
+  - platform: ads1115
+    multiplexer: 'A0_GND'
+    gain: 4.096
+    name: "MQ135 Voltage"
+    id: mq135_voltage
+    update_interval: 1s
+    filters:
+      - sliding_window_moving_average:
+          window_size: 10
+          send_every: 1
+
+  - platform: ads1115
+    multiplexer: 'A1_GND'
+    gain: 4.096
+    name: "MQ3 Voltage"
+    id: mq3_voltage
+    update_interval: 1s
+    filters:
+      - sliding_window_moving_average:
+          window_size: 10
+          send_every: 1
+
+  - platform: sht4x
+    i2c_id: bus_a
+    temperature:
+      name: "SHT40 Temperature"
+      id: sht40_temperature
+    humidity:
+      name: "SHT40 Humidity"
+      id: sht40_humidity
+    address: 0x44
+    update_interval: 5s
+
+  - platform: bme68x_bsec2
+    bme68x_bsec2_id: bme688_bsec
+    temperature:
+      name: "BME688 Temperature"
+      id: bme688_temperature
+    humidity:
+      name: "BME688 Humidity"
+      id: bme688_humidity
+    pressure:
+      name: "BME688 Pressure"
+      id: bme688_pressure
+    gas_resistance:
+      name: "BME688 Gas Resistance"
+      id: bme688_gas_resistance
+    iaq:
+      name: "BME688 IAQ"
+      id: bme688_iaq
+    co2_equivalent:
+      name: "BME688 CO2 Equivalent"
+      id: bme688_co2_equivalent
+    breath_voc_equivalent:
+      name: "BME688 Breath VOC Equivalent"
+      id: bme688_bvoc_equivalent
+
+  - platform: scd4x
+    i2c_id: bus_b
+    co2:
+      name: "SCD40 CO2"
+      id: scd40_co2
+    temperature:
+      name: "SCD40 Temperature"
+      id: scd40_temperature
+    humidity:
+      name: "SCD40 Humidity"
+      id: scd40_humidity
+    update_interval: 5s

@@ -1,0 +1,88 @@
+substitutions:
+  device_name: air-ai-sgp41
+  friendly_name: Air AI SGP41
+  mqtt_topic_prefix: air-ai
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+
+# Opcional, mas útil para atualizar firmware sem cabo.
+ota:
+  platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: ${friendly_name} Fallback
+    password: "air-ai-setup"
+
+captive_portal:
+
+# MQTT: ajustar broker/credenciais em secrets.yaml.
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  discovery: false
+  topic_prefix: ${device_name}
+
+# Ajusta os pinos ao teu módulo ESP32.
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  scan: true
+
+# Recomendado: o SGP41 melhora com compensação de temperatura/humidade.
+# Este exemplo assume um SHT31 no mesmo barramento I2C.
+# Se não tiveres sensor T/H, remove o bloco sht3xd e o bloco compensation no sgp4x.
+sensor:
+  - platform: sht3xd
+    temperature:
+      name: ${friendly_name} Temperature
+      id: air_temperature
+      on_value:
+        then:
+          - mqtt.publish:
+              topic: ${mqtt_topic_prefix}/temperature
+              payload: !lambda 'return to_string(x);'
+    humidity:
+      name: ${friendly_name} Humidity
+      id: air_humidity
+      on_value:
+        then:
+          - mqtt.publish:
+              topic: ${mqtt_topic_prefix}/humidity
+              payload: !lambda 'return to_string(x);'
+    update_interval: 5s
+
+  - platform: sgp4x
+    voc:
+      name: ${friendly_name} VOC Index
+      id: sgp41_voc_index
+      on_value:
+        then:
+          - mqtt.publish:
+              topic: ${mqtt_topic_prefix}/sgp41/voc_index
+              payload: !lambda 'return to_string(x);'
+    nox:
+      name: ${friendly_name} NOx Index
+      id: sgp41_nox_index
+      on_value:
+        then:
+          - mqtt.publish:
+              topic: ${mqtt_topic_prefix}/sgp41/nox_index
+              payload: !lambda 'return to_string(x);'
+    compensation:
+      temperature_source: air_temperature
+      humidity_source: air_humidity
+    store_baseline: true
+    update_interval: 5s

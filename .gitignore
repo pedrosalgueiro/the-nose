@@ -1,0 +1,88 @@
+# -----------------------------
+# Python
+# -----------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python tooling/cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# -----------------------------
+# Environment / secrets
+# -----------------------------
+.env
+.env.*
+!.env.example
+
+secrets.yaml
+esphome/secrets.yaml
+
+# -----------------------------
+# ESPHome build files
+# -----------------------------
+.esphome/
+**/.esphome/
+.pioenvs/
+.piolibdeps/
+platformio.ini
+
+# ESPHome generated/temporary files
+*.bin
+*.elf
+*.map
+*.hex
+
+# -----------------------------
+# Logs
+# -----------------------------
+*.log
+logs/
+debug/
+
+# -----------------------------
+# Streamlit secrets
+# -----------------------------
+.streamlit/secrets.toml
+
+# Optional: keep Streamlit config if you create one
+!.streamlit/config.toml
+
+# -----------------------------
+# Jupyter / notebooks
+# -----------------------------
+.ipynb_checkpoints/
+
+# -----------------------------
+# OS/editor files
+# -----------------------------
+.DS_Store
+Thumbs.db
+
+.vscode/
+.idea/
+
+# -----------------------------
+# Temporary files
+# -----------------------------
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+*~
