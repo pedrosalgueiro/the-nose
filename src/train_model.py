@@ -24,6 +24,14 @@ def _can_stratify(y: pd.Series) -> bool:
 
 def train(input_path: str, output_path: str, test_size: float = 0.25) -> None:
     df = pd.read_csv(input_path)
+
+    # Ignorar sessões/classes de recuperação no treino principal
+    df = df[
+        ~df["label"].str.contains("recover", case=False, na=False)
+        & ~df["session_id"].str.contains("recover", case=False, na=False)
+        & ~df["session_id"].str.contains("lemon", case=False, na=False)
+    ].copy()
+    
     if "label" not in df.columns:
         raise ValueError("O CSV precisa de uma coluna 'label'.")
     if "session_id" not in df.columns:

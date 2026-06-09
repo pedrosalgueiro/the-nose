@@ -3,7 +3,13 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from config import SENSOR_COLUMNS, WINDOW_SIZE
+#from config import SENSOR_COLUMNS, WINDOW_SIZE
+
+try:
+    from .config import SENSOR_COLUMNS, WINDOW_SIZE
+except ImportError:
+    from config import SENSOR_COLUMNS, WINDOW_SIZE
+
 
 # Protocol used for real data collection:
 #   0-30 s    clean-air baseline
@@ -262,3 +268,150 @@ def features_for_latest_window(records: list[dict], window_size: int = WINDOW_SI
         if col not in window.columns:
             window[col] = 0.0
     return pd.DataFrame([extract_segmented_features(window)]).replace([np.inf, -np.inf], 0).fillna(0.0)
+
+
+
+def extract_fast_features(session: pd.DataFrame) -> dict:
+    """
+    Extract features for fast prediction.
+
+    Protocol:
+    0–25 s   baseline
+    35–60 s  early exposure
+    """
+
+    session = session.sort_values("elapsed_s").copy()
+
+    if "elapsed_s" not in session.columns:
+        raise ValueError("Fast features require elapsed_s column.")
+
+    t = session["elapsed_s"].astype(float).to_numpy()
+
+    baseline_mask = (t >= 0.0) & (t < 25.0)
+    exposure_mask = (t >= 35.0) & (t <= 60.0)
+
+    features = {}
+
+    for col in SENSOR_COLUMNS:
+        if col not in session.columns:
+            continue
+
+        values = pd.to_numeric(session[col], errors="coerce").to_numpy(dtype=float)
+
+        baseline = values[baseline_mask]
+        exposure = values[exposure_mask]
+        exposure_t = t[exposure_mask]
+
+        baseline = baseline[np.isfinite(baseline)]
+        exposure = exposure[np.isfinite(exposure)]
+
+        if len(baseline) == 0 or len(exposure) == 0:
+            continue
+
+        b_mean = float(np.mean(baseline))
+        b_std = float(np.std(baseline)) if len(baseline) > 1 else 0.0
+
+        e_mean = float(np.mean(exposure))
+        e_std = float(np.std(exposure)) if len(exposure) > 1 else 0.0
+        e_min = float(np.min(exposure))
+        e_max = float(np.max(exposure))
+
+        delta_mean = e_mean - b_mean
+        delta_min = e_min - b_mean
+        delta_max = e_max - b_mean
+
+        ratio_mean = e_mean / b_mean if abs(b_mean) > 1e-9 else 0.0
+        ratio_max = e_max / b_mean if abs(b_mean) > 1e-9 else 0.0
+
+        if len(exposure_t) >= 2 and len(exposure) >= 2:
+            try:
+                slope = float(np.polyfit(exposure_t[:len(exposure)], exposure, 1)[0])
+            except Exception:
+                slope = 0.0
+
+            delta_series = exposure - b_mean
+
+            auc_delta = safe_auc(delta_series, exposure_t[:len(exposure)])
+            auc_abs_delta = safe_auc(np.abs(delta_series), exposure_t[:len(exposure)])
+
+        else:
+            slope = 0.0
+            auc_delta = 0.0
+            auc_abs_delta = 0.0
+
+        features[f"{col}_baseline_mean"] = b_mean
+        features[f"{col}_baseline_std"] = b_std
+
+        features[f"{col}_early_mean"] = e_mean
+        features[f"{col}_early_std"] = e_std
+        features[f"{col}_early_min"] = e_min
+        features[f"{col}_early_max"] = e_max
+
+        features[f"{col}_early_delta_mean"] = delta_mean
+        features[f"{col}_early_delta_min"] = delta_min
+        features[f"{col}_early_delta_max"] = delta_max
+
+        features[f"{col}_early_ratio_mean"] = ratio_mean
+        features[f"{col}_early_ratio_max"] = ratio_max
+
+        features[f"{col}_early_slope"] = slope
+        features[f"{col}_early_auc_delta"] = auc_delta
+        features[f"{col}_early_auc_abs_delta"] = auc_abs_delta
+
+    return features
+
+
+def make_fast_feature_table(df: pd.DataFrame):
+    rows = []
+    labels = []
+
+    for (label, session_id), group in df.groupby(["label", "session_id"], sort=False):
+        feats = extract_fast_features(group)
+        feats["session_id"] = session_id
+        rows.append(feats)
+        labels.append(label)
+
+    X = pd.DataFrame(rows).fillna(0.0)
+    session_ids = X.pop("session_id")
+    y = pd.Series(labels, name="label")
+
+    return X, y, session_ids
+
+
+def features_for_fast_window(records: list[dict]) -> pd.DataFrame | None:
+    """
+    Create fast model features from app live records.
+    Needs around 60 seconds of data.
+    """
+
+    if len(records) < 60:
+        return None
+
+    df = pd.DataFrame(records[-70:]).copy()
+
+    if "elapsed_s" not in df.columns:
+        df["elapsed_s"] = np.arange(len(df), dtype=float)
+
+    feats = extract_fast_features(df)
+    if not feats:
+        return None
+
+    return pd.DataFrame([feats]).fillna(0.0)
+
+
+
+def safe_auc(y, x):
+    y = np.asarray(y, dtype=float)
+    x = np.asarray(x, dtype=float)
+
+    mask = np.isfinite(y) & np.isfinite(x)
+    y = y[mask]
+    x = x[mask]
+
+    if len(y) < 2:
+        return 0.0
+
+    if hasattr(np, "trapezoid"):
+        return float(np.trapezoid(y, x))
+
+    return float(np.trapz(y, x))

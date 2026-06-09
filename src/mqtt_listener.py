@@ -8,8 +8,13 @@ from typing import Dict, Optional
 
 import paho.mqtt.client as mqtt
 
-from config import DEFAULT_MQTT_TOPICS, SENSOR_COLUMNS
+#from config import DEFAULT_MQTT_TOPICS, SENSOR_COLUMNS
 
+try:
+    from .config import DEFAULT_MQTT_TOPICS, SENSOR_COLUMNS
+except ImportError:
+    from config import DEFAULT_MQTT_TOPICS, SENSOR_COLUMNS
+    
 
 def _parse_float(payload: bytes) -> Optional[float]:
     text = payload.decode(errors="ignore").strip()
