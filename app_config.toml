@@ -14,7 +14,7 @@ password = ""
 model_path = "models/electronic_nose_fast_lemon.joblib"
 
 [session]
-preview_start_s = 0
+preview_start_s = 60
 lock_s = 90
 end_s = 180
 clean_air_stable_s = 25
