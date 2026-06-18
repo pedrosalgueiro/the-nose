@@ -1,0 +1,2226 @@
+from __future__ import annotations
+
+import sys
+import json
+import os
+import time
+from pathlib import Path
+from typing import Any
+
+try:
+    import tomllib
+except Exception:
+    tomllib = None
+
+import joblib
+import pandas as pd
+import streamlit as st
+try:
+    from streamlit_autorefresh import st_autorefresh
+except Exception:
+    st_autorefresh = None
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+SRC_DIR = PROJECT_ROOT / "src"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+try:
+    from src.config import SENSOR_COLUMNS, DEFAULT_MQTT_TOPICS
+    from src.features import features_for_latest_window, features_for_fast_window
+    from src.mqtt_listener import MQTTConfig, MQTTLiveReader
+except ImportError:
+    from config import SENSOR_COLUMNS, DEFAULT_MQTT_TOPICS
+    from features import features_for_latest_window, features_for_fast_window
+    from mqtt_listener import MQTTConfig, MQTTLiveReader
+
+
+st.set_page_config(page_title="Electronic Nose", page_icon="👃", layout="wide")
+
+
+# -------------------------------------------------------------------
+# Compact visual layout
+# -------------------------------------------------------------------
+
+st.markdown(
+    """
+    <style>
+
+        /* Hide Streamlit top toolbar / Deploy button / menu for demo fullscreen. */
+        #MainMenu {
+            visibility: hidden !important;
+            height: 0 !important;
+        }
+        header[data-testid="stHeader"] {
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+        }
+        div[data-testid="stToolbar"] {
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+        }
+        div[data-testid="stDecoration"] {
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+        }
+        div[data-testid="stStatusWidget"] {
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+        }
+        .stDeployButton {
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+        }
+        footer {
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+        }
+
+        /* Make tab names easier to see during the demo. */
+        button[data-baseweb="tab"] {
+            font-size: 1.08rem !important;
+            font-weight: 800 !important;
+            color: #0f172a !important;
+            padding: 0.55rem 1.05rem !important;
+        }
+        button[data-baseweb="tab"][aria-selected="true"] {
+            color: #047857 !important;
+            border-bottom: 3px solid #047857 !important;
+        }
+        button[data-baseweb="tab"] p {
+            font-size: 1.08rem !important;
+            font-weight: 800 !important;
+        }
+
+
+        /* View selector replacing st.tabs. It renders only the selected view,
+           avoiding redraw of hidden charts on every auto-refresh. */
+        div[role="radiogroup"] {
+            gap: 0.4rem !important;
+            margin-bottom: 0.55rem !important;
+        }
+        div[role="radiogroup"] label {
+            font-size: 1.05rem !important;
+            font-weight: 800 !important;
+            padding: 0.30rem 0.65rem !important;
+            border-radius: 999px !important;
+            border: 1px solid #d1d5db !important;
+            background: #f8fafc !important;
+        }
+
+        .block-container {
+            padding-top: 0.35rem !important;
+        }
+
+
+        /* Make tab names easier to see during the demo. */
+        button[data-baseweb="tab"] {
+            font-size: 1.08rem !important;
+            font-weight: 800 !important;
+            color: #0f172a !important;
+            padding: 0.55rem 1.05rem !important;
+        }
+        button[data-baseweb="tab"][aria-selected="true"] {
+            color: #047857 !important;
+            border-bottom: 3px solid #047857 !important;
+        }
+        button[data-baseweb="tab"] p {
+            font-size: 1.08rem !important;
+            font-weight: 800 !important;
+        }
+
+
+        /* View selector replacing st.tabs. It renders only the selected view,
+           avoiding redraw of hidden charts on every auto-refresh. */
+        div[role="radiogroup"] {
+            gap: 0.4rem !important;
+            margin-bottom: 0.55rem !important;
+        }
+        div[role="radiogroup"] label {
+            font-size: 1.05rem !important;
+            font-weight: 800 !important;
+            padding: 0.30rem 0.65rem !important;
+            border-radius: 999px !important;
+            border: 1px solid #d1d5db !important;
+            background: #f8fafc !important;
+        }
+
+        .block-container {
+            padding-top: 0.8rem;
+            padding-bottom: 0.8rem;
+            padding-left: 1.2rem;
+            padding-right: 1.2rem;
+            max-width: 100vw;
+        }
+
+        div[data-testid="stMainBlockContainer"] {
+            max-width: 100vw;
+        }
+
+        div[data-testid="stHorizontalBlock"] {
+            gap: 0.8rem;
+        }
+
+        h1, h2, h3 {
+            margin-top: 0.2rem;
+            margin-bottom: 0.35rem;
+        }
+
+        div[data-testid="stMetric"] {
+            background: #f8fafc;
+            border: 1px solid #e5e7eb;
+            padding: 0.65rem 0.8rem;
+            border-radius: 0.75rem;
+        }
+
+        div[data-testid="stMetricValue"] {
+            font-size: 1.65rem;
+        }
+
+        div[data-testid="stMetricLabel"] {
+            font-size: 0.78rem;
+        }
+
+        .stAlert {
+            padding-top: 0.45rem;
+            padding-bottom: 0.45rem;
+        }
+
+        div[data-testid="stAlert"] {
+            padding: 0.45rem 0.55rem;
+            margin-bottom: 0.35rem;
+        }
+
+        div[data-testid="stAlert"] p {
+            font-size: 0.86rem;
+            line-height: 1.18;
+        }
+
+        .compact-card {
+            border: 1px solid #e5e7eb;
+            border-radius: 0.9rem;
+            padding: 0.85rem 1rem;
+            background: #ffffff;
+        }
+
+        .small-caption {
+            color: #64748b;
+            font-size: 0.85rem;
+        }
+
+
+        /* Prevent header/logo vertical clipping in fullscreen/projector mode. */
+        div[data-testid="stImage"] {
+            overflow: visible !important;
+        }
+        div[data-testid="column"] {
+            overflow: visible !important;
+        }
+
+        section[data-testid="stSidebar"] {
+            width: 300px !important;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+DEFAULT_FULL_MODEL_PATH = "models/electronic_nose_fast.joblib"
+DEFAULT_FAST_MODEL_PATH = "models/electronic_nose_fast.joblib"
+
+LOGO_PATH = "assets/electronic_nose_logo_highres_4k.png"
+VISTALAB_LOGO_PATH = "assets/vistalab_logo_padded.png"
+
+DEFAULT_CONFIG_PATH = "app_config.toml"
+
+
+def deep_update(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge updates into base."""
+    result = dict(base)
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = deep_update(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def load_app_config(config_path: str | Path) -> tuple[dict[str, Any], Path | None, str | None]:
+    """
+    Load application configuration from TOML, JSON, or YAML.
+
+    TOML is recommended because Python 3.11+ reads it without extra packages.
+    YAML also works if PyYAML is installed.
+    """
+    default_config: dict[str, Any] = {
+        "app": {
+            "read_interval_ms": 1000,
+            "logo_path": LOGO_PATH,
+            "vistalab_logo_path": VISTALAB_LOGO_PATH,
+            "show_vistalab_logo": True,
+            "show_config_warning": True,
+        },
+        "mqtt": {
+            "broker": "10.0.0.2",
+            "port": 1883,
+            "username": "",
+            "password": "",
+        },
+        "models": {
+            "model_path": DEFAULT_FAST_MODEL_PATH,
+        },
+        "session": {
+            "classification_start_s": 60.0,
+            "classification_lock_s": 90.0,
+            "session_end_s": 180.0,
+        },
+        "ui": {
+            "max_dashboard_messages": 3,
+            "clean_air_trend_window_s": 45.0,
+            "clean_air_trend_deadband": 0.03,
+        },
+        "topics": dict(DEFAULT_MQTT_TOPICS),
+    }
+
+    path = Path(config_path).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+
+    if not path.exists():
+        return default_config, None, f"Ficheiro de configuração não encontrado: {path}"
+
+    try:
+        suffix = path.suffix.lower()
+        raw_text = path.read_text(encoding="utf-8")
+
+        if suffix == ".toml":
+            if tomllib is None:
+                return default_config, None, "TOML não está disponível nesta versão de Python."
+            loaded = tomllib.loads(raw_text)
+        elif suffix == ".json":
+            loaded = json.loads(raw_text)
+        elif suffix in {".yaml", ".yml"}:
+            try:
+                import yaml  # type: ignore
+            except Exception:
+                return default_config, None, "Para usar YAML, instala: pip install pyyaml"
+            loaded = yaml.safe_load(raw_text) or {}
+        else:
+            return default_config, None, "Formato não suportado. Usa .toml, .json ou .yaml."
+
+        if not isinstance(loaded, dict):
+            return default_config, None, "O ficheiro de configuração deve conter um objeto/dicionário."
+
+        return deep_update(default_config, loaded), path, None
+
+    except Exception as exc:
+        return default_config, None, f"Erro ao ler configuração: {exc}"
+
+
+
+FULL_WINDOW_SIZE = 180
+SESSION_END_S = 180.0
+
+# Baseline used for the "ready for next sample" monitor.
+# Use only the first 20 s to avoid accidentally including the moment
+# when the sample starts approaching the nozzle.
+READY_BASELINE_END_S = 20.0
+
+RECOVERY_STABLE_SECONDS = 30.0
+
+# Cleaner, less rigid "air is clean again" logic.
+# Uses the continuous classifier instead of requiring every sensor to return
+# exactly to the initial baseline.
+CLEAN_AIR_READY_CONFIDENCE = 0.75
+CLEAN_AIR_STABLE_SECONDS = 30.0
+CLEAN_AIR_ALMOST_CONFIDENCE = 0.55
+
+READY_THRESHOLDS = {
+    "voc_abs_delta": 10.0,
+    "mq135_abs_delta": 0.02,
+    "mq3_abs_delta": 0.01,
+    "bme688_iaq_abs_delta": 15.0,
+    "bme688_bvoc_abs_delta": 1.0,
+    "bme688_eco2_abs_delta": 80.0,
+    "bme688_gas_relative_delta": 0.15,
+}
+
+
+@st.cache_resource
+def load_model_bundle(path: str) -> dict[str, Any] | None:
+    model_path = Path(path)
+    if not model_path.exists():
+        return None
+    try:
+        return joblib.load(model_path)
+    except Exception as exc:
+        st.error(f"Erro ao carregar modelo {path}: {exc}")
+        return None
+
+
+@st.cache_resource
+def create_mqtt_reader(
+    broker: str,
+    port: int,
+    username: str | None,
+    password: str | None,
+    topics_tuple: tuple[tuple[str, str], ...],
+) -> MQTTLiveReader:
+    cfg_kwargs = {
+        "broker": broker,
+        "port": port,
+        "topics": dict(topics_tuple),
+    }
+    if username:
+        cfg_kwargs["username"] = username
+    if password:
+        cfg_kwargs["password"] = password
+
+    cfg = MQTTConfig(**cfg_kwargs)
+    reader = MQTTLiveReader(cfg)
+    reader.start()
+    return reader
+
+
+def normalize_window_records(records: list[dict[str, Any]], window_size: int) -> list[dict[str, Any]]:
+    """
+    Take the latest window and re-index elapsed_s to 0..N-1.
+
+    This is used for diagnostic/preview classifications where the original
+    elapsed_s may be above 180 or where we want a partial session preview.
+    """
+    window = list(records[-window_size:])
+    normalized: list[dict[str, Any]] = []
+
+    for idx, row in enumerate(window):
+        new_row = dict(row)
+        new_row["elapsed_s"] = float(idx)
+        normalized.append(new_row)
+
+    return normalized
+
+
+def resample_records_to_1hz(
+    records: list[dict[str, Any]],
+    *,
+    duration_s: int = FULL_WINDOW_SIZE,
+    pad_to_duration: bool = False,
+) -> list[dict[str, Any]]:
+    """
+    Convert irregular Streamlit readings into a regular 1 Hz session.
+
+    Streamlit reruns can take longer than exactly 1 second, so a 180 s session
+    may only contain 110-140 rows. The model was trained with ~1 row/s, so this
+    function rebuilds a regular timeline using nearest/forward-filled readings.
+
+    If pad_to_duration=True, missing future seconds are filled with the latest
+    available reading. This is useful only for preview before 180 s.
+    """
+
+    if not records:
+        return []
+
+    df = pd.DataFrame(records).copy()
+
+    if "elapsed_s" not in df.columns:
+        df["elapsed_s"] = range(len(df))
+
+    df["elapsed_s"] = pd.to_numeric(df["elapsed_s"], errors="coerce")
+    df = df.dropna(subset=["elapsed_s"]).sort_values("elapsed_s")
+
+    if df.empty:
+        return []
+
+    max_elapsed = float(df["elapsed_s"].max())
+
+    if pad_to_duration:
+        end_s = duration_s - 1
+    else:
+        end_s = min(duration_s - 1, int(max_elapsed))
+
+    if end_s < 1:
+        return []
+
+    target = pd.DataFrame({"elapsed_s": [float(i) for i in range(end_s + 1)]})
+
+    # Use merge_asof to map each target second to the most recent real reading.
+    merged = pd.merge_asof(
+        target,
+        df,
+        on="elapsed_s",
+        direction="backward",
+    )
+
+    # Fill possible first rows if the first real reading happened after 0 s.
+    merged = merged.ffill().bfill()
+
+    # Force the target timeline after filling.
+    merged["elapsed_s"] = target["elapsed_s"]
+
+    return merged.to_dict(orient="records")
+
+
+
+
+def rolling_records_last_seconds(records: list[dict[str, Any]], seconds: int) -> list[dict[str, Any]]:
+    """
+    Extract the last N seconds of monitor data and normalize elapsed_s to start at 0.
+
+    Used for continuous rolling classification. This keeps the feature extractor
+    aligned with the 0..180 s style windows used during training.
+    """
+    if not records:
+        return []
+
+    df = pd.DataFrame(records).copy()
+
+    if "elapsed_s" not in df.columns:
+        return normalize_window_records(records, seconds)
+
+    df["elapsed_s"] = pd.to_numeric(df["elapsed_s"], errors="coerce")
+    df = df.dropna(subset=["elapsed_s"]).sort_values("elapsed_s")
+
+    if df.empty:
+        return []
+
+    max_t = float(df["elapsed_s"].max())
+    df = df[df["elapsed_s"] >= max_t - seconds].copy()
+
+    if df.empty:
+        return []
+
+    min_t = float(df["elapsed_s"].min())
+    df["elapsed_s"] = df["elapsed_s"] - min_t
+
+    return df.to_dict(orient="records")
+
+
+def pad_session_to_full_window(records: list[dict[str, Any]], window_size: int = FULL_WINDOW_SIZE) -> list[dict[str, Any]]:
+    """
+    Build a 180-s shaped preview window before the session is complete.
+
+    The full model was trained with a 180-s protocol. Before 180 s, this
+    function pads the missing tail with the latest available reading. This
+    allows a preview of how the final-model probabilities are evolving.
+
+    This preview is intentionally not the official final prediction.
+    """
+    if not records:
+        return []
+
+    window = list(records[-window_size:])
+    normalized: list[dict[str, Any]] = []
+
+    for idx, row in enumerate(window):
+        new_row = dict(row)
+        new_row["elapsed_s"] = float(idx)
+        normalized.append(new_row)
+
+    while len(normalized) < window_size:
+        last = dict(normalized[-1])
+        last["elapsed_s"] = float(len(normalized))
+        normalized.append(last)
+
+    return normalized
+
+
+def predict_from_records(
+    records: list[dict[str, Any]],
+    bundle: dict[str, Any] | None,
+    mode: str,
+    *,
+    normalize_window: bool = False,
+    pad_to_full_window: bool = False,
+    regularize_1hz: bool = True,
+) -> dict[str, Any] | None:
+    if bundle is None:
+        return None
+
+    if regularize_1hz:
+        if mode == "fast":
+            records = resample_records_to_1hz(
+                records,
+                duration_s=FAST_WINDOW_SIZE,
+                pad_to_duration=pad_to_full_window,
+            )
+        else:
+            records = resample_records_to_1hz(
+                records,
+                duration_s=FULL_WINDOW_SIZE,
+                pad_to_duration=pad_to_full_window,
+            )
+    elif mode == "fast":
+        if normalize_window:
+            records = normalize_window_records(records, FAST_WINDOW_SIZE)
+    else:
+        if pad_to_full_window:
+            records = pad_session_to_full_window(records, FULL_WINDOW_SIZE)
+        elif normalize_window:
+            records = normalize_window_records(records, FULL_WINDOW_SIZE)
+
+    if mode == "fast":
+        X = features_for_fast_window(records)
+    else:
+        X = features_for_latest_window(records, FULL_WINDOW_SIZE)
+
+    if X is None:
+        return None
+
+    model = bundle["model"]
+    expected_columns = bundle.get("feature_columns")
+    if expected_columns is not None:
+        X = X.reindex(columns=expected_columns, fill_value=0.0)
+
+    labels = bundle.get("labels")
+    if labels is None:
+        labels = list(model.classes_)
+
+    probs = model.predict_proba(X)[0]
+    best_idx = int(probs.argmax())
+
+    return {
+        "label": labels[best_idx],
+        "confidence": float(probs[best_idx]),
+        "probs": dict(zip(labels, [float(p) for p in probs])),
+    }
+
+
+def compute_baseline(records: list[dict[str, Any]]) -> dict[str, float]:
+    """
+    Baseline for the readiness monitor.
+
+    This intentionally uses only the first READY_BASELINE_END_S seconds,
+    not the whole 0-25 s used by the fast ML model, because users may start
+    moving the sample close to the nozzle near the end of the baseline phase.
+    """
+    if not records:
+        return {}
+
+    df = pd.DataFrame(records).copy()
+    if "elapsed_s" not in df.columns:
+        return {}
+
+    baseline_df = df[
+        (df["elapsed_s"] >= 0)
+        & (df["elapsed_s"] < READY_BASELINE_END_S)
+    ].copy()
+
+    # Require at least a few readings so we do not lock a poor baseline.
+    if baseline_df.empty or len(baseline_df) < 5:
+        return {}
+
+    baseline: dict[str, float] = {}
+    for col in SENSOR_COLUMNS:
+        if col in baseline_df.columns:
+            value = pd.to_numeric(baseline_df[col], errors="coerce").mean()
+            if pd.notna(value):
+                baseline[col] = float(value)
+
+    return baseline
+
+
+def latest_window(records: list[dict[str, Any]], seconds: float) -> pd.DataFrame:
+    if not records:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(records).copy()
+    if "elapsed_s" not in df.columns:
+        return df.tail(int(seconds))
+
+    max_t = float(df["elapsed_s"].max())
+    return df[df["elapsed_s"] >= max_t - seconds].copy()
+
+
+def is_ready_for_next_sample(
+    monitor_records: list[dict[str, Any]],
+    baseline: dict[str, float],
+) -> tuple[bool, dict[str, Any]]:
+    """
+    Monitorização contínua, sem usar classes/sessões de recovery.
+
+    Compara os últimos ~30 s com a baseline inicial da medição.
+    """
+    if not baseline:
+        return False, {
+            "state": "Sem baseline",
+            "reason": "Ainda não há baseline suficiente para comparar.",
+            "checks": {},
+            "details": {},
+        }
+
+    window = latest_window(monitor_records, RECOVERY_STABLE_SECONDS)
+
+    if window.empty or len(window) < max(5, int(RECOVERY_STABLE_SECONDS / 2)):
+        return False, {
+            "state": "A aguardar",
+            "reason": f"Ainda não há {RECOVERY_STABLE_SECONDS:.0f} s de dados recentes.",
+            "checks": {},
+            "details": {},
+        }
+
+    recent: dict[str, float] = {}
+    for col in SENSOR_COLUMNS:
+        if col in window.columns:
+            value = pd.to_numeric(window[col], errors="coerce").mean()
+            if pd.notna(value):
+                recent[col] = float(value)
+
+    checks: dict[str, bool] = {}
+    details: dict[str, float] = {}
+
+    def add_abs_check(sensor: str, name: str, threshold_key: str) -> None:
+        if sensor not in baseline or sensor not in recent:
+            return
+        delta = abs(recent[sensor] - baseline[sensor])
+        details[threshold_key] = delta
+        checks[name] = delta <= READY_THRESHOLDS[threshold_key]
+
+    add_abs_check("voc", "VOC perto da baseline", "voc_abs_delta")
+    add_abs_check("mq135_voltage", "MQ135 perto da baseline", "mq135_abs_delta")
+    add_abs_check("mq3_voltage", "MQ3 perto da baseline", "mq3_abs_delta")
+    add_abs_check("bme688_iaq", "BME688 IAQ perto da baseline", "bme688_iaq_abs_delta")
+    add_abs_check("bme688_breath_voc_equivalent", "BME688 bVOC perto da baseline", "bme688_bvoc_abs_delta")
+    add_abs_check("bme688_co2_equivalent", "BME688 eCO2 perto da baseline", "bme688_eco2_abs_delta")
+
+    if (
+        "bme688_gas_resistance" in baseline
+        and "bme688_gas_resistance" in recent
+        and abs(baseline["bme688_gas_resistance"]) > 1e-9
+    ):
+        gas_rel_delta = abs(
+            recent["bme688_gas_resistance"] - baseline["bme688_gas_resistance"]
+        ) / abs(baseline["bme688_gas_resistance"])
+        details["bme688_gas_relative_delta"] = gas_rel_delta
+        checks["BME688 gas resistance estabilizada"] = (
+            gas_rel_delta <= READY_THRESHOLDS["bme688_gas_relative_delta"]
+        )
+
+    if not checks:
+        return False, {
+            "state": "Sem sensores suficientes",
+            "reason": "Não há sensores suficientes para avaliar recuperação.",
+            "checks": checks,
+            "details": details,
+        }
+
+    ready = all(checks.values())
+    if ready:
+        return True, {
+            "state": "Pronta / clean air",
+            "reason": f"Sensores estáveis durante ~{RECOVERY_STABLE_SECONDS:.0f} s.",
+            "checks": checks,
+            "details": details,
+        }
+
+    failed = [name for name, ok in checks.items() if not ok]
+    return False, {
+        "state": "A recuperar",
+        "reason": "Ainda há sinais afastados da baseline: " + ", ".join(failed),
+        "checks": checks,
+        "details": details,
+    }
+
+
+def air_state_from_continuous_classifier(
+    *,
+    continuous_prediction: dict[str, Any] | None,
+    history: list[dict[str, Any]],
+    running: bool,
+    elapsed_s: float,
+) -> tuple[bool, dict[str, Any]]:
+    """
+    Determine whether the air looks clean enough for the next sample.
+
+    This is intentionally based on the continuous classifier, not on strict
+    return-to-baseline thresholds. It is more practical for sensors that have
+    long recovery tails, such as BME688 bVOC after alcohol/lemon.
+    """
+    if continuous_prediction is None:
+        if running:
+            return False, {
+                "state": "A medir",
+                "short_state": "A medir",
+                "reason": "A classificação contínua ainda não tem dados suficientes.",
+                "clean_air_probability": None,
+            }
+
+        return False, {
+            "state": "A aguardar",
+            "short_state": "A aguardar",
+            "reason": "A aguardar dados suficientes para avaliar se o ar voltou a clean_air.",
+            "clean_air_probability": None,
+        }
+
+    probs = continuous_prediction.get("probs", {})
+    clean_air_prob = float(probs.get("clean_air", 0.0))
+    current_label = str(continuous_prediction.get("label", "—"))
+    current_confidence = float(continuous_prediction.get("confidence", 0.0))
+
+    # During the controlled sample session, do not claim it is ready even if
+    # clean_air temporarily appears.
+    if running and elapsed_s < SESSION_END_S:
+        return False, {
+            "state": "Medição em curso",
+            "short_state": "A medir",
+            "reason": "A sessão de amostra ainda está em curso.",
+            "clean_air_probability": clean_air_prob,
+            "current_label": current_label,
+            "current_confidence": current_confidence,
+        }
+
+    stable_history = []
+    if history:
+        latest_t = float(history[-1].get("elapsed_s", 0.0))
+        stable_history = [
+            row for row in history
+            if latest_t - float(row.get("elapsed_s", 0.0)) <= CLEAN_AIR_STABLE_SECONDS
+        ]
+
+    stable_clean_air = False
+    if stable_history:
+        stable_clean_air = all(
+            float(row.get("clean_air", 0.0)) >= CLEAN_AIR_READY_CONFIDENCE
+            for row in stable_history
+        )
+
+    if stable_clean_air and clean_air_prob >= CLEAN_AIR_READY_CONFIDENCE:
+        return True, {
+            "state": "Ar limpo",
+            "short_state": "Ar limpo",
+            "reason": (
+                f"O classificador contínuo reconhece clean_air com confiança alta "
+                f"há ~{CLEAN_AIR_STABLE_SECONDS:.0f} s."
+            ),
+            "clean_air_probability": clean_air_prob,
+            "current_label": current_label,
+            "current_confidence": current_confidence,
+        }
+
+    if clean_air_prob >= CLEAN_AIR_READY_CONFIDENCE:
+        return False, {
+            "state": "Quase limpo",
+            "short_state": "Quase limpo",
+            "reason": (
+                "O ar já parece clean_air, mas ainda precisa de se manter estável "
+                f"durante ~{CLEAN_AIR_STABLE_SECONDS:.0f} s."
+            ),
+            "clean_air_probability": clean_air_prob,
+            "current_label": current_label,
+            "current_confidence": current_confidence,
+        }
+
+    if clean_air_prob >= CLEAN_AIR_ALMOST_CONFIDENCE or current_label == "clean_air":
+        return False, {
+            "state": "A estabilizar",
+            "short_state": "A estabilizar",
+            "reason": "O ar está a aproximar-se de clean_air, mas a confiança ainda é moderada.",
+            "clean_air_probability": clean_air_prob,
+            "current_label": current_label,
+            "current_confidence": current_confidence,
+        }
+
+    return False, {
+        "state": "A recuperar",
+        "short_state": "A recuperar",
+        "reason": (
+            f"O classificador contínuo ainda vê '{current_label}' "
+            f"com {current_confidence * 100:.1f}% de confiança."
+        ),
+        "clean_air_probability": clean_air_prob,
+        "current_label": current_label,
+        "current_confidence": current_confidence,
+    }
+
+
+def reset_measurement() -> None:
+    now = time.time()
+
+    # Reset only the sample session.
+    # Continuous classification remains active and keeps its own history.
+    st.session_state.session_id = int(st.session_state.get("session_id", 0)) + 1
+    st.session_state.session_records = []
+    st.session_state.final_preview_history = []
+
+    st.session_state.measurement_start_time = now
+    st.session_state.running = True
+    st.session_state.session_finished = False
+
+    st.session_state.final_prediction_locked = None
+    st.session_state.fast_prediction_locked = None
+    st.session_state.baseline_locked = {}
+
+
+def stop_measurement() -> None:
+    # Stop only the current sample session.
+    # Continuous classification remains active.
+    st.session_state.running = False
+
+
+def status_text(elapsed_s: float, finished: bool) -> str:
+    if finished:
+        return "Sessão concluída. Classificação congelada; monitorização contínua ativa."
+    if elapsed_s < READY_BASELINE_END_S:
+        return "Baseline para recuperação: manter ar limpo junto ao nozzle."
+    if elapsed_s < 35:
+        return "Transição: aproximar a amostra do nozzle."
+    if elapsed_s < 60:
+        return "Exposição inicial: previsão rápida quase pronta."
+    if elapsed_s < CLASSIFICATION_LOCK_S:
+        return "Classificação em avaliação: manter a amostra estável junto ao nozzle."
+    if elapsed_s < 180:
+        return "Recuperação: remover a amostra e deixar a câmara recuperar."
+    return "Sessão completa: classificação congelada e recuperação terminada."
+
+
+
+
+def render_probability_bars(
+    probs: Dict[str, float],
+    title: str | None = None,
+    max_items: int | None = None,
+) -> None:
+    """Render probability bars in the original compact visual style.
+
+    Uses st.html instead of deprecated Streamlit component, avoiding the terminal
+    deprecation warning while keeping the previous dashboard appearance.
+    """
+    if title:
+        st.markdown(f"**{title}**")
+
+    if not probs:
+        st.info("Sem probabilidades disponíveis.")
+        return
+
+    items = sorted(probs.items(), key=lambda kv: float(kv[1]), reverse=True)
+    if max_items is not None:
+        items = items[:max_items]
+
+    rows = []
+    for label, probability in items:
+        p = max(0.0, min(1.0, float(probability)))
+        pct = p * 100.0
+        rows.append(
+            f"""
+            <div class="prob-row">
+                <div class="prob-head">
+                    <span class="prob-name">{label}</span>
+                    <span class="prob-value">{pct:.1f}%</span>
+                </div>
+                <div class="prob-track">
+                    <div class="prob-fill" style="width:{pct:.2f}%"></div>
+                </div>
+            </div>
+            """
+        )
+
+    html = f"""
+    <style>
+        .prob-wrapper {{
+            width: 100%;
+            margin-top: 0.15rem;
+            margin-bottom: 0.10rem;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }}
+        .prob-row {{
+            margin: 0.18rem 0 0.42rem 0;
+        }}
+        .prob-head {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.13rem;
+            line-height: 1.05;
+        }}
+        .prob-name {{
+            font-size: 0.86rem;
+            font-weight: 700;
+            color: #0f172a;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
+        .prob-value {{
+            font-size: 0.82rem;
+            font-weight: 800;
+            color: #334155;
+            white-space: nowrap;
+        }}
+        .prob-track {{
+            width: 100%;
+            height: 0.55rem;
+            background: #e5e7eb;
+            border-radius: 999px;
+            overflow: hidden;
+            box-sizing: border-box;
+        }}
+        .prob-fill {{
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #10b981, #3b82f6);
+        }}
+    </style>
+    <div class="prob-wrapper">
+        {''.join(rows)}
+    </div>
+    """
+
+    # st.html renders static HTML directly in the app and does not use the
+    # deprecated components.v1.html API.
+    st.html(html)
+
+
+def clean_air_trend_from_history(
+    history: list[dict[str, Any]],
+    *,
+    window_s: float | None = None,
+    deadband: float | None = None,
+) -> dict[str, Any]:
+    """
+    Summarise camera recovery using continuous clean_air probability.
+
+    Returns a small trend object instead of a second full probability chart.
+    """
+    if window_s is None:
+        window_s = float(globals().get("CLEAN_AIR_TREND_WINDOW_S", 45.0))
+    if deadband is None:
+        deadband = float(globals().get("CLEAN_AIR_TREND_DEADBAND", 0.03))
+
+    if not history:
+        return {
+            "clean_air_prob": None,
+            "trend": "sem dados",
+            "trend_icon": "—",
+            "delta": None,
+            "last_label": "—",
+            "last_confidence": None,
+        }
+
+    latest = history[-1]
+    latest_elapsed = float(latest.get("elapsed_s", 0.0))
+    latest_clean = latest.get("clean_air")
+    if latest_clean is None:
+        latest_clean = latest.get("clean air")
+
+    reference = None
+    for row in reversed(history):
+        if latest_elapsed - float(row.get("elapsed_s", 0.0)) >= window_s:
+            reference = row
+            break
+
+    if reference is None:
+        reference = history[0]
+
+    reference_clean = reference.get("clean_air")
+    if reference_clean is None:
+        reference_clean = reference.get("clean air")
+
+    if latest_clean is None or reference_clean is None:
+        trend = "sem clean_air"
+        icon = "—"
+        delta = None
+    else:
+        latest_clean = float(latest_clean)
+        reference_clean = float(reference_clean)
+        delta = latest_clean - reference_clean
+        if delta > deadband:
+            trend = "a subir"
+            icon = "↗️"
+        elif delta < -deadband:
+            trend = "a descer"
+            icon = "↘️"
+        else:
+            trend = "estável"
+            icon = "→"
+
+    return {
+        "clean_air_prob": None if latest_clean is None else float(latest_clean),
+        "trend": trend,
+        "trend_icon": icon,
+        "delta": delta,
+        "last_label": latest.get("label", "—"),
+        "last_confidence": latest.get("confidence"),
+    }
+
+
+def render_recovery_summary(
+    *,
+    ready_info: dict[str, Any],
+    continuous_prediction: dict[str, Any] | None,
+    history: list[dict[str, Any]],
+    running: bool,
+) -> None:
+    """
+    Compact recovery panel.
+
+    It keeps the useful continuous evaluation, but does not repeat a full
+    probability chart while the sample classification already shows all classes.
+    """
+    summary = clean_air_trend_from_history(history)
+
+    clean_air_prob = None
+    if continuous_prediction is not None:
+        clean_air_prob = continuous_prediction.get("probs", {}).get("clean_air")
+        if clean_air_prob is None:
+            clean_air_prob = continuous_prediction.get("probs", {}).get("clean air")
+
+    if clean_air_prob is None:
+        clean_air_prob = ready_info.get("clean_air_probability")
+
+    if clean_air_prob is None:
+        clean_air_prob = summary.get("clean_air_prob")
+
+    state = ready_info.get("short_state", ready_info.get("state", "—"))
+
+    if clean_air_prob is None:
+        st.metric("Clean air", "—", summary["trend_icon"])
+        st.progress(0.0, text="sem dados clean_air")
+    else:
+        clean_air_prob = max(0.0, min(1.0, float(clean_air_prob)))
+        delta = summary.get("delta")
+        delta_text = ""
+        if delta is not None:
+            delta_text = f"{delta * 100:+.1f} pp"
+        st.metric("Clean air", f"{clean_air_prob * 100:.1f}%", delta_text or summary["trend_icon"])
+        st.progress(clean_air_prob, text=f"{clean_air_prob * 100:.1f}%")
+
+    st.metric("Estado", state)
+
+    trend_text = f"{summary['trend_icon']} {summary['trend']}"
+    last_label = summary.get("last_label", "—")
+    last_conf = summary.get("last_confidence")
+    if last_conf is not None:
+        last_text = f"{last_label} ({float(last_conf) * 100:.1f}%)"
+    else:
+        last_text = str(last_label)
+
+    st.caption(f"Tendência clean_air: **{trend_text}**")
+    st.caption(f"Classe contínua dominante: **{last_text}**")
+
+    reason = ready_info.get("reason", "")
+    if reason:
+        st.caption(reason)
+
+    if running:
+        st.caption("Resumo contínuo da recuperação; a classificação completa da amostra está no painel principal.")
+
+
+
+
+
+def labels_from_bundle(bundle: dict[str, Any] | None) -> list[str]:
+    if bundle is None:
+        return ["alcohol", "clean_air", "coffee", "vinegar"]
+    labels = bundle.get("labels")
+    if labels is not None:
+        return list(labels)
+    model = bundle.get("model")
+    if model is not None and hasattr(model, "classes_"):
+        return list(model.classes_)
+    return ["alcohol", "clean_air", "coffee", "vinegar"]
+
+
+def empty_probs_for_bundle(bundle: dict[str, Any] | None) -> dict[str, float]:
+    return {label: 0.0 for label in labels_from_bundle(bundle)}
+
+
+def probs_or_empty(
+    prediction: dict[str, Any] | None,
+    bundle: dict[str, Any] | None,
+) -> dict[str, float]:
+    if prediction is not None:
+        return prediction.get("probs", {})
+    return empty_probs_for_bundle(bundle)
+
+
+def render_waiting_metric(title: str, message: str) -> None:
+    st.metric(title, "A aguardar", message)
+
+
+
+def sensor_value(record: dict[str, Any] | None, key: str) -> float | None:
+    if not record:
+        return None
+    value = record.get(key)
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def delta_from_baseline(
+    latest_record: dict[str, Any] | None,
+    baseline: dict[str, float],
+    key: str,
+) -> float | None:
+    current = sensor_value(latest_record, key)
+    base = baseline.get(key)
+    if current is None or base is None:
+        return None
+    return current - float(base)
+
+
+def build_system_messages(
+    *,
+    latest_record: dict[str, Any] | None,
+    baseline: dict[str, float],
+    elapsed_s: float,
+    running: bool,
+    session_finished: bool,
+    ready: bool,
+    fast_prediction: dict[str, Any] | None,
+    final_prediction: dict[str, Any] | None,
+    continuous_prediction: dict[str, Any] | None,
+) -> list[dict[str, str]]:
+    """
+    Human-readable messages for participants.
+
+    These messages are intentionally rule-based and explanatory. They do not
+    use recovery classes. They summarize what the sensors/model appear to be
+    doing in real time.
+    """
+    messages: list[dict[str, str]] = []
+
+    if latest_record is None:
+        return [
+            {
+                "level": "info",
+                "title": "A aguardar leituras",
+                "body": "Ainda não há dados suficientes dos sensores.",
+            }
+        ]
+
+    if running:
+        if elapsed_s < READY_BASELINE_END_S:
+            messages.append(
+                {
+                    "level": "info",
+                    "title": "A medir o ar de referência",
+                    "body": "Mantém ar limpo junto ao nozzle para criar uma baseline estável.",
+                }
+            )
+        elif elapsed_s < 35:
+            messages.append(
+                {
+                    "level": "info",
+                    "title": "Aproximação da amostra",
+                    "body": "A amostra pode ser aproximada do nozzle. O sistema começa a procurar alterações nos sensores.",
+                }
+            )
+        elif elapsed_s < 90:
+            messages.append(
+                {
+                    "level": "info",
+                    "title": "Exposição em curso",
+                    "body": "Os sensores estão a registar a assinatura inicial da amostra.",
+                }
+            )
+        elif elapsed_s < SESSION_END_S:
+            messages.append(
+                {
+                    "level": "info",
+                    "title": "Fase de recuperação",
+                    "body": "Remove a amostra e deixa a câmara recuperar. A previsão final será congelada aos 90 s.",
+                }
+            )
+    elif session_finished:
+        messages.append(
+            {
+                "level": "success" if ready else "warning",
+                "title": "Sessão concluída",
+                "body": (
+                    "A câmara parece pronta para uma nova amostra."
+                    if ready
+                    else "A previsão final está congelada, mas a câmara ainda está a recuperar."
+                ),
+            }
+        )
+    else:
+        messages.append(
+            {
+                "level": "info",
+                "title": "Monitorização contínua ativa",
+                "body": "O sistema está a observar o ar em tempo real. Inicia uma nova medição quando quiseres testar uma amostra.",
+            }
+        )
+
+    # Sensor-based observations compared with baseline.
+    voc_delta = delta_from_baseline(latest_record, baseline, "voc")
+    mq135_delta = delta_from_baseline(latest_record, baseline, "mq135_voltage")
+    mq3_delta = delta_from_baseline(latest_record, baseline, "mq3_voltage")
+    iaq_delta = delta_from_baseline(latest_record, baseline, "bme688_iaq")
+    bvoc_delta = delta_from_baseline(latest_record, baseline, "bme688_breath_voc_equivalent")
+
+    gas_current = sensor_value(latest_record, "bme688_gas_resistance")
+    gas_base = baseline.get("bme688_gas_resistance") if baseline else None
+    gas_rel_drop = None
+    if gas_current is not None and gas_base is not None and abs(gas_base) > 1e-9:
+        gas_rel_drop = (float(gas_base) - gas_current) / abs(float(gas_base))
+
+    signal_parts: list[str] = []
+
+    if voc_delta is not None and voc_delta > 25:
+        signal_parts.append(f"VOC subiu +{voc_delta:.0f}")
+    elif voc_delta is not None and voc_delta > 10:
+        signal_parts.append(f"VOC subiu ligeiramente (+{voc_delta:.0f})")
+
+    if mq135_delta is not None and mq135_delta > 0.05:
+        signal_parts.append(f"MQ135 subiu +{mq135_delta:.3f} V")
+    if mq3_delta is not None and mq3_delta > 0.03:
+        signal_parts.append(f"MQ3 subiu +{mq3_delta:.3f} V")
+
+    if iaq_delta is not None and iaq_delta > 40:
+        signal_parts.append(f"IAQ aumentou +{iaq_delta:.0f}")
+    elif iaq_delta is not None and iaq_delta > 15:
+        signal_parts.append(f"IAQ aumentou +{iaq_delta:.0f}")
+
+    if bvoc_delta is not None and bvoc_delta > 10:
+        signal_parts.append(f"bVOC subiu +{bvoc_delta:.1f} ppm")
+
+    if gas_rel_drop is not None and gas_rel_drop > 0.25:
+        signal_parts.append(f"resistência de gás caiu {gas_rel_drop * 100:.0f}%")
+    elif gas_rel_drop is not None and gas_rel_drop > 0.12:
+        signal_parts.append(f"resistência de gás caiu {gas_rel_drop * 100:.0f}%")
+
+    if signal_parts:
+        messages.append(
+            {
+                "level": "warning",
+                "title": "Alteração química detetada",
+                "body": "Os sensores afastaram-se da baseline: " + "; ".join(signal_parts[:4]) + ".",
+            }
+        )
+    elif baseline:
+        messages.append(
+            {
+                "level": "success",
+                "title": "Sinais próximos da baseline",
+                "body": "Neste momento os principais sensores parecem próximos do ar de referência.",
+            }
+        )
+
+    # Model observations.
+    active_prediction = final_prediction or continuous_prediction or fast_prediction
+    if active_prediction is not None:
+        label = active_prediction.get("label", "—")
+        confidence = float(active_prediction.get("confidence", 0.0)) * 100
+
+        if confidence >= 85:
+            messages.append(
+                {
+                    "level": "success",
+                    "title": "Modelo confiante",
+                    "body": f"O modelo está bastante confiante em '{label}' ({confidence:.1f}%).",
+                }
+            )
+        elif confidence >= 60:
+            messages.append(
+                {
+                    "level": "info",
+                    "title": "Modelo em observação",
+                    "body": f"A classe mais provável é '{label}', mas a confiança ainda é moderada ({confidence:.1f}%).",
+                }
+            )
+        else:
+            messages.append(
+                {
+                    "level": "warning",
+                    "title": "Previsão ainda ambígua",
+                    "body": f"O modelo ainda não está muito confiante. Classe atual: '{label}' ({confidence:.1f}%).",
+                }
+            )
+
+    # Special cases useful for the project.
+    if bvoc_delta is not None and bvoc_delta > 200:
+        messages.append(
+            {
+                "level": "warning",
+                "title": "BME688 bVOC muito elevado",
+                "body": "O bVOC está muito alto. Algumas amostras, como limão ou álcool, podem saturar este indicador e demorar a recuperar.",
+            }
+        )
+
+    # Keep the box compact.
+    return messages[:5]
+
+
+def render_system_messages(messages: list[dict[str, str]]) -> None:
+    for message in messages:
+        level = message.get("level", "info")
+        title = message.get("title", "")
+        body = message.get("body", "")
+
+        text = f"**{title}**  \n{body}"
+
+        if level == "success":
+            st.success(text)
+        elif level == "warning":
+            st.warning(text)
+        elif level == "error":
+            st.error(text)
+        else:
+            st.info(text)
+
+
+
+def render_live_session_timer(
+    *,
+    start_time: float,
+    running: bool,
+    finished: bool,
+    current_elapsed: float,
+    session_end_s: float = SESSION_END_S,
+) -> None:
+    """Render the session timer using native Streamlit widgets."""
+    elapsed_value = min(max(0.0, float(current_elapsed)), float(session_end_s))
+    remaining_value = max(0.0, float(session_end_s) - elapsed_value)
+
+    if finished:
+        status = "Sessão concluída"
+    elif running:
+        status = "Sessão em curso"
+    else:
+        status = "Pronto"
+
+    st.metric(
+        "Tempo",
+        f"{elapsed_value:03.0f} s",
+        f"{remaining_value:04.0f} s restantes · {status}",
+    )
+
+
+def render_live_session_progress(
+    *,
+    start_time: float,
+    running: bool,
+    finished: bool,
+    current_elapsed: float,
+    session_end_s: float = SESSION_END_S,
+) -> None:
+    """Render the session progress using native Streamlit widgets."""
+    elapsed_value = min(max(0.0, float(current_elapsed)), float(session_end_s))
+    progress = elapsed_value / max(float(session_end_s), 1.0)
+    st.progress(progress)
+
+
+def sample_instruction(elapsed_s: float, finished: bool) -> dict[str, str]:
+    """
+    Large but compact instruction banner for the sample collection protocol.
+    """
+    if finished:
+        return {
+            "icon": "✅",
+            "phase": "SESSÃO CONCLUÍDA",
+            "instruction": "Resultado final congelado. Aguarda até o estado do ar voltar a limpo.",
+            "color": "#ecfdf5",
+            "border": "#10b981",
+        }
+
+    if elapsed_s < 20:
+        return {
+            "icon": "🟢",
+            "phase": "0–20 s · MEDIR AR LIMPO",
+            "instruction": "Mantém o nozzle sem amostra para criar a referência inicial.",
+            "color": "#ecfdf5",
+            "border": "#10b981",
+        }
+
+    if elapsed_s < 35:
+        return {
+            "icon": "🟡",
+            "phase": "20–35 s · APROXIMAR AMOSTRA",
+            "instruction": "Aproxima a amostra do nozzle, mantendo a mesma distância.",
+            "color": "#fffbeb",
+            "border": "#f59e0b",
+        }
+
+    if elapsed_s < 90:
+        return {
+            "icon": "🔴",
+            "phase": "35–90 s · MANTER AMOSTRA",
+            "instruction": "Mantém a amostra junto ao nozzle. O sistema está a observar a assinatura do cheiro.",
+            "color": "#fef2f2",
+            "border": "#ef4444",
+        }
+
+    if elapsed_s < 180:
+        return {
+            "icon": "🔵",
+            "phase": "90–180 s · REMOVER AMOSTRA",
+            "instruction": "Remove a amostra e deixa a câmara recuperar.",
+            "color": "#eff6ff",
+            "border": "#3b82f6",
+        }
+
+    return {
+        "icon": "✅",
+        "phase": "SESSÃO CONCLUÍDA",
+        "instruction": "Resultado final congelado. A classificação contínua continua ativa.",
+        "color": "#ecfdf5",
+        "border": "#10b981",
+    }
+
+
+def render_sample_instruction(elapsed_s: float, finished: bool) -> None:
+    msg = sample_instruction(elapsed_s, finished)
+
+    st.markdown(
+        f"""
+        <div style="
+            background: {msg['color']};
+            border-left: 8px solid {msg['border']};
+            border-radius: 12px;
+            padding: 10px 16px;
+            margin: 4px 0 8px 0;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        ">
+            <div style="font-size: 2.0rem; line-height: 1;">
+                {msg['icon']}
+            </div>
+            <div>
+                <div style="
+                    font-size: 1.15rem;
+                    font-weight: 800;
+                    line-height: 1.1;
+                ">
+                    {msg['phase']}
+                </div>
+                <div style="
+                    font-size: 1.0rem;
+                    line-height: 1.2;
+                    margin-top: 2px;
+                ">
+                    {msg['instruction']}
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+
+# -------------------------------------------------------------------
+# Session state
+# -------------------------------------------------------------------
+
+defaults = {
+    "session_records": [],
+    "monitor_records": [],
+    "continuous_prediction_history": [],
+    "final_preview_history": [],
+    "measurement_start_time": time.time(),
+    "monitor_start_time": time.time(),
+    "running": False,
+    "session_finished": False,
+    "final_prediction_locked": None,
+    "fast_prediction_locked": None,
+    "baseline_locked": {},
+}
+for key, value in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+
+# -------------------------------------------------------------------
+# Configuration
+# -------------------------------------------------------------------
+
+# Configuration is loaded automatically from a file.
+# Priority:
+# 1) APP_CONFIG environment variable
+# 2) app_config.toml in the project root
+# 3) built-in demo defaults
+config_path = os.environ.get("APP_CONFIG", DEFAULT_CONFIG_PATH)
+app_config, loaded_config_path, config_error = load_app_config(config_path)
+
+app_settings = app_config.get("app", {})
+mqtt_settings = app_config.get("mqtt", {})
+model_settings = app_config.get("models", {})
+session_settings = app_config.get("session", {})
+ui_settings = app_config.get("ui", {})
+
+read_interval_ms = int(app_settings.get("read_interval_ms", 1000))
+LOGO_PATH = str(app_settings.get("logo_path", LOGO_PATH))
+VISTALAB_LOGO_PATH = str(app_settings.get("vistalab_logo_path", VISTALAB_LOGO_PATH))
+SHOW_VISTALAB_LOGO = bool(app_settings.get("show_vistalab_logo", True))
+
+broker = str(mqtt_settings.get("broker", "10.0.0.2"))
+port = int(mqtt_settings.get("port", 1883))
+username = str(mqtt_settings.get("username", "") or "")
+password = str(mqtt_settings.get("password", "") or "")
+
+# Fast-only version: the same configured model is used everywhere.
+fast_model_path = str(model_settings.get("model_path", DEFAULT_FAST_MODEL_PATH))
+full_model_path = fast_model_path
+
+configured_topics = dict(DEFAULT_MQTT_TOPICS)
+configured_topics.update(app_config.get("topics", {}) or {})
+
+MAX_DASHBOARD_MESSAGES = int(ui_settings.get("max_dashboard_messages", 3))
+CLEAN_AIR_TREND_WINDOW_S = float(ui_settings.get("clean_air_trend_window_s", 45.0))
+CLEAN_AIR_TREND_DEADBAND = float(ui_settings.get("clean_air_trend_deadband", 0.03))
+
+CLASSIFICATION_START_S = float(session_settings.get("classification_start_s", 60.0))
+CLASSIFICATION_LOCK_S = float(session_settings.get("classification_lock_s", 90.0))
+SESSION_END_S = float(session_settings.get("session_end_s", 180.0))
+FULL_WINDOW_SIZE = int(max(SESSION_END_S, 1))
+FAST_WINDOW_SIZE = int(max(CLASSIFICATION_LOCK_S, 1))
+
+if config_error and bool(app_settings.get("show_config_warning", True)):
+    st.warning(f"{config_error} A usar valores por defeito.")
+
+
+# -------------------------------------------------------------------
+# Load models and MQTT
+# -------------------------------------------------------------------
+
+fast_bundle = load_model_bundle(fast_model_path)
+full_bundle = fast_bundle
+
+reader = create_mqtt_reader(
+    broker=broker,
+    port=int(port),
+    username=username or None,
+    password=password or None,
+    topics_tuple=tuple(sorted(configured_topics.items())),
+)
+
+
+
+def resolve_project_path(path_value: str | Path) -> Path:
+    """Resolve a relative path from the project root."""
+    path = Path(path_value)
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / path
+
+
+# -------------------------------------------------------------------
+# Main UI
+# -------------------------------------------------------------------
+
+header_main, header_right = st.columns([3.70, 2.40])
+
+with header_main:
+    # Keep logo and title together, but avoid embedding a multi-megabyte base64
+    # image on every auto-refresh. st.image lets Streamlit/browser cache the file.
+    logo_box, title_box = st.columns([0.22, 0.78], vertical_alignment="center")
+    with logo_box:
+        logo_path = resolve_project_path(LOGO_PATH)
+        if logo_path.exists():
+            st.image(str(logo_path), width=110)
+        else:
+            st.markdown("## 👃")
+    with title_box:
+        st.markdown(
+            """
+            <div style="padding-top:0.05rem;">
+                <div style="
+                    font-size:2.05rem;
+                    line-height:1.12;
+                    font-weight:800;
+                    color:#0f172a;
+                    margin:0 0 0.35rem 0;
+                    white-space:nowrap;
+                ">Electronic Nose</div>
+                <div style="
+                    color:#64748b;
+                    font-size:0.85rem;
+                    line-height:1.12;
+                    white-space:nowrap;
+                ">IA + sensores ambientais para reconhecer padrões de odor.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+with header_right:
+    if SHOW_VISTALAB_LOGO:
+        vistalab_logo_path = resolve_project_path(VISTALAB_LOGO_PATH)
+        if vistalab_logo_path.exists():
+            st.image(str(vistalab_logo_path), width='stretch')
+        else:
+            st.markdown(
+                """
+                <div style='text-align:right; line-height:1.05; padding-top:0.35rem'>
+                    <div style='font-weight:800; font-size:1.05rem;'>VISTALab</div>
+                    <div style='font-size:0.78rem; color:#64748b;'>Centro ALGORITMI · Universidade de Évora</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+st.divider()
+
+control_a, control_b, control_c = st.columns([1.2, 1.2, 3.2])
+
+with control_a:
+    st.button(
+        "▶️ Iniciar nova medição",
+        type="primary",
+        width='stretch',
+        on_click=reset_measurement,
+    )
+
+with control_b:
+    st.button(
+        "⏹️ Terminar sessão",
+        width='stretch',
+        on_click=stop_measurement,
+    )
+
+with control_c:
+    st.info(
+        "Modo atual: apenas modelo rápido. Configuração lida de ficheiro. "
+        "Protocolo: 0–20 s ar limpo, 20–35 s aproximar amostra, "
+        "35–90 s classificação em avaliação, 90–180 s recuperação. A classificação fica pronta aos 90 s."
+    )
+
+
+# -------------------------------------------------------------------
+# Read one sample from MQTT
+# -------------------------------------------------------------------
+
+# Continuous monitoring is always active while the app is open.
+latest = reader.read()
+now = time.time()
+
+monitor_elapsed_s = now - st.session_state.monitor_start_time
+session_elapsed_s = now - st.session_state.measurement_start_time
+
+monitor_row = {
+    "timestamp": pd.Timestamp.now('UTC').isoformat(),
+    "elapsed_s": monitor_elapsed_s,
+}
+for col in SENSOR_COLUMNS:
+    monitor_row[col] = latest.get(col)
+
+st.session_state.monitor_records.append(monitor_row)
+st.session_state.monitor_records = st.session_state.monitor_records[-1800:]
+
+# Session records are only collected during an explicit sample session.
+if st.session_state.running and session_elapsed_s <= SESSION_END_S:
+    session_row = dict(monitor_row)
+    session_row["elapsed_s"] = session_elapsed_s
+    st.session_state.session_records.append(session_row)
+    st.session_state.session_records = st.session_state.session_records[-600:]
+
+
+session_records = st.session_state.session_records
+monitor_records = st.session_state.monitor_records
+
+# elapsed = current sample-session time.
+# monitor_records use an independent continuous clock.
+elapsed = 0.0
+if st.session_state.running or st.session_state.session_finished:
+    elapsed = time.time() - st.session_state.measurement_start_time
+elif session_records:
+    elapsed = float(session_records[-1].get("elapsed_s", 0.0))
+
+session_elapsed = 0.0
+if session_records:
+    session_elapsed = float(session_records[-1].get("elapsed_s", 0.0))
+
+
+# -------------------------------------------------------------------
+# Predictions and automatic final lock
+# -------------------------------------------------------------------
+
+classification_effective_points = len(
+    resample_records_to_1hz(
+        session_records,
+        duration_s=FAST_WINDOW_SIZE,
+        pad_to_duration=False,
+    )
+)
+
+MIN_PREVIEW_EFFECTIVE_POINTS = int(max(45, CLASSIFICATION_START_S * 0.75))
+MIN_LOCK_EFFECTIVE_POINTS = int(max(60, CLASSIFICATION_LOCK_S * 0.75))
+
+fast_prediction = None
+final_preview_prediction = None
+
+can_preview_classification = (
+    st.session_state.running
+    and elapsed >= CLASSIFICATION_START_S
+    and classification_effective_points >= MIN_PREVIEW_EFFECTIVE_POINTS
+)
+
+if can_preview_classification:
+    # This preview is recalculated on every rerun from the current session data.
+    # It therefore keeps changing between 60 s and the final lock at 90 s.
+    final_preview_prediction = predict_from_records(
+        session_records,
+        fast_bundle,
+        mode="fast",
+        pad_to_full_window=True,
+    )
+    fast_prediction = final_preview_prediction
+
+    if final_preview_prediction is not None:
+        preview_row = {
+            "elapsed_s": float(session_records[-1].get("elapsed_s", 0.0)),
+            "label": final_preview_prediction["label"],
+            "confidence": final_preview_prediction["confidence"],
+        }
+        for label, prob in final_preview_prediction["probs"].items():
+            preview_row[label] = prob
+
+        if (
+            not st.session_state.final_preview_history
+            or preview_row["elapsed_s"] > st.session_state.final_preview_history[-1]["elapsed_s"]
+        ):
+            st.session_state.final_preview_history.append(preview_row)
+            st.session_state.final_preview_history = st.session_state.final_preview_history[-240:]
+
+if (
+    not st.session_state.baseline_locked
+    and session_records
+    and float(session_records[-1].get("elapsed_s", 0.0)) >= READY_BASELINE_END_S
+):
+    baseline = compute_baseline(session_records)
+    if baseline:
+        st.session_state.baseline_locked = baseline
+
+if (
+    st.session_state.running
+    and elapsed >= CLASSIFICATION_LOCK_S
+    and st.session_state.final_prediction_locked is None
+    and classification_effective_points >= MIN_LOCK_EFFECTIVE_POINTS
+):
+    # Freeze the final sample classification only when enough effective data
+    # have been collected. Recovery monitoring continues until SESSION_END_S.
+    full_prediction_for_lock = predict_from_records(
+        session_records,
+        fast_bundle,
+        mode="fast",
+        pad_to_full_window=True,
+    )
+
+    if full_prediction_for_lock is not None:
+        st.session_state.final_prediction_locked = full_prediction_for_lock
+
+    if not st.session_state.baseline_locked:
+        st.session_state.baseline_locked = compute_baseline(session_records)
+
+if st.session_state.running and elapsed >= SESSION_END_S:
+    st.session_state.running = False
+    st.session_state.session_finished = True
+
+# No separate "fast_prediction_locked": before 90 s the preview must keep updating.
+display_fast_prediction = fast_prediction
+display_full_prediction = st.session_state.final_prediction_locked
+
+
+# -------------------------------------------------------------------
+# Continuous diagnostic classification during recovery
+# -------------------------------------------------------------------
+
+continuous_prediction = None
+continuous_mode = None
+
+# Real-time panel logic:
+# - during an active sample session, keep the right-side panel aligned with the
+#   same session data used by the fast/final preview models;
+# - outside a session, use the true rolling continuous classifier to monitor
+#   recovery / clean_air.
+if st.session_state.running:
+    if final_preview_prediction is not None:
+        continuous_prediction = final_preview_prediction
+        continuous_mode = "session_final_preview"
+    elif fast_prediction is not None:
+        continuous_prediction = fast_prediction
+        continuous_mode = "session_fast_preview"
+elif monitor_records and float(monitor_records[-1].get("elapsed_s", 0.0)) >= FULL_WINDOW_SIZE:
+    continuous_prediction = predict_from_records(
+        rolling_records_last_seconds(monitor_records, FULL_WINDOW_SIZE),
+        fast_bundle,
+        mode="fast",
+        regularize_1hz=True,
+    )
+    continuous_mode = "rolling_full_180s"
+elif monitor_records and float(monitor_records[-1].get("elapsed_s", 0.0)) >= 60:
+    continuous_prediction = predict_from_records(
+        rolling_records_last_seconds(monitor_records, FAST_WINDOW_SIZE),
+        fast_bundle,
+        mode="fast",
+        regularize_1hz=True,
+    )
+    continuous_mode = "rolling_fast_60s"
+
+if continuous_prediction is not None and continuous_mode in {"rolling_full_180s", "rolling_fast_60s"}:
+    history_row = {
+        "elapsed_s": float(monitor_records[-1].get("elapsed_s", 0.0)),
+        "label": continuous_prediction["label"],
+        "confidence": continuous_prediction["confidence"],
+        "mode": continuous_mode,
+    }
+    for label, prob in continuous_prediction["probs"].items():
+        history_row[label] = prob
+
+    # Avoid appending duplicate points caused by reruns without a new timestamp.
+    if (
+        not st.session_state.continuous_prediction_history
+        or history_row["elapsed_s"] > st.session_state.continuous_prediction_history[-1]["elapsed_s"]
+    ):
+        st.session_state.continuous_prediction_history.append(history_row)
+        st.session_state.continuous_prediction_history = st.session_state.continuous_prediction_history[-900:]
+
+
+# -------------------------------------------------------------------
+# Dashboard UI
+# -------------------------------------------------------------------
+
+baseline_ready, baseline_ready_info = is_ready_for_next_sample(
+    monitor_records=monitor_records,
+    baseline=st.session_state.baseline_locked,
+)
+
+ready, ready_info = air_state_from_continuous_classifier(
+    continuous_prediction=continuous_prediction,
+    history=st.session_state.continuous_prediction_history,
+    running=st.session_state.running,
+    elapsed_s=elapsed,
+)
+
+metric_cols = st.columns(5)
+
+with metric_cols[0]:
+    render_live_session_timer(
+        start_time=st.session_state.measurement_start_time,
+        running=st.session_state.running,
+        finished=st.session_state.session_finished,
+        current_elapsed=elapsed,
+        session_end_s=SESSION_END_S,
+    )
+
+with metric_cols[1]:
+    st.metric("Dados úteis", f"{classification_effective_points}/{FAST_WINDOW_SIZE} s", f"{len(session_records)} leituras MQTT")
+
+with metric_cols[2]:
+    if display_full_prediction is not None:
+        classification_state = "Pronta"
+    elif final_preview_prediction is not None or display_fast_prediction is not None:
+        classification_state = "Em avaliação"
+    elif elapsed >= CLASSIFICATION_START_S and st.session_state.running:
+        classification_state = "A recolher dados"
+    else:
+        classification_state = "A aguardar"
+    st.metric("Classificação", classification_state)
+
+with metric_cols[3]:
+    st.metric(
+        "Sessão",
+        "Recuperação" if (display_full_prediction is not None and st.session_state.running) else ("Concluída" if st.session_state.session_finished else "Em curso"),
+    )
+
+with metric_cols[4]:
+    st.metric("Estado do ar", ready_info.get("short_state", ready_info.get("state", "—")))
+
+render_live_session_progress(
+    start_time=st.session_state.measurement_start_time,
+    running=st.session_state.running,
+    finished=st.session_state.session_finished,
+    current_elapsed=elapsed,
+    session_end_s=SESSION_END_S,
+)
+render_sample_instruction(elapsed, st.session_state.session_finished)
+
+if display_full_prediction is not None and st.session_state.running:
+    st.success("Classificação pronta e congelada; a monitorização da recuperação continua até ao fim da sessão.")
+elif display_full_prediction is not None:
+    st.success("Sessão concluída: classificação congelada e recuperação terminada.")
+
+selected_view = st.radio(
+    "Vista",
+    ["📊 Dashboard", "📈 Gráficos", "⚙️ Detalhes"],
+    horizontal=True,
+    label_visibility="collapsed",
+    key="selected_view",
+)
+
+if selected_view == "📊 Dashboard":
+    dash_left, dash_mid, dash_messages = st.columns([1, 1, 1])
+
+    with dash_left:
+        st.markdown("### 🧠 Classificação da amostra")
+
+        sample_prediction = (
+            display_full_prediction
+            or final_preview_prediction
+            or display_fast_prediction
+        )
+
+        if fast_bundle is None:
+            st.warning(f"Modelo rápido não encontrado: `{fast_model_path}`")
+            render_probability_bars(empty_probs_for_bundle(None))
+        elif sample_prediction is None:
+            if elapsed < CLASSIFICATION_START_S:
+                missing = max(0, int(CLASSIFICATION_START_S - elapsed))
+                render_waiting_metric("Resultado", f"~{missing} s")
+                st.caption("O modelo começa a prever após cerca de 60 s.")
+            else:
+                missing_points = max(0, MIN_PREVIEW_EFFECTIVE_POINTS - classification_effective_points)
+                render_waiting_metric("Resultado", "A recolher dados")
+                st.caption(f"A aguardar mais dados úteis para uma previsão estável: faltam ~{missing_points} s 1 Hz.")
+            render_probability_bars(empty_probs_for_bundle(fast_bundle))
+        else:
+            if display_full_prediction is not None:
+                metric_name = "Resultado congelado"
+                caption = "Resultado congelado aos 90 s."
+            elif final_preview_prediction is not None:
+                metric_name = "Resultado em avaliação"
+                remaining_lock = max(0, int(CLASSIFICATION_LOCK_S - elapsed))
+                caption = f"Previsão em atualização. Resultado final congela em ~{remaining_lock} s."
+            else:
+                metric_name = "Resultado preliminar"
+                remaining_lock = max(0, int(CLASSIFICATION_LOCK_S - elapsed))
+                caption = f"Apenas indicação inicial. Congela em ~{remaining_lock} s."
+
+            st.metric(
+                metric_name,
+                sample_prediction["label"],
+                f"{sample_prediction['confidence'] * 100:.1f}% confiança",
+            )
+            st.caption(caption)
+
+            # Keep all model classes visible here, including lemon in the 5-class model.
+            render_probability_bars(sample_prediction["probs"])
+
+    with dash_mid:
+        st.markdown("### 🌬️ Recuperação da câmara")
+        render_recovery_summary(
+            ready_info=ready_info,
+            continuous_prediction=continuous_prediction,
+            history=st.session_state.continuous_prediction_history,
+            running=st.session_state.running,
+        )
+
+    with dash_messages:
+        st.markdown("### 💬 Mensagens")
+
+        latest_record_for_messages = monitor_records[-1] if monitor_records else None
+        system_messages = build_system_messages(
+            latest_record=latest_record_for_messages,
+            baseline=st.session_state.baseline_locked,
+            elapsed_s=elapsed,
+            running=st.session_state.running,
+            session_finished=st.session_state.session_finished,
+            ready=ready,
+            fast_prediction=display_fast_prediction,
+            final_prediction=display_full_prediction,
+            continuous_prediction=continuous_prediction,
+        )
+
+        render_system_messages(system_messages[:MAX_DASHBOARD_MESSAGES])
+
+
+
+elif selected_view == "📈 Gráficos":
+    graph_left, graph_right = st.columns([1, 1])
+
+    with graph_left:
+        st.markdown("### 📈 Sensores da sessão")
+        if len(session_records) >= 2:
+            df_session = pd.DataFrame(session_records)
+            chart_cols = [
+                "voc",
+                "mq135_voltage",
+                "mq3_voltage",
+                "bme688_gas_resistance",
+                "bme688_iaq",
+                "bme688_breath_voc_equivalent",
+                "scd40_co2",
+            ]
+            available_chart_cols = [c for c in chart_cols if c in df_session.columns]
+            selected_cols = st.multiselect(
+                "Sensores",
+                options=available_chart_cols,
+                default=available_chart_cols[:3],
+            )
+            if selected_cols:
+                st.line_chart(df_session.set_index("elapsed_s")[selected_cols], height=260)
+        else:
+            st.info("O gráfico aparece depois de pelo menos duas leituras.")
+
+    with graph_right:
+        st.markdown("### 🔄 Probabilidades contínuas")
+        history = st.session_state.continuous_prediction_history
+        if len(history) >= 2:
+            history_df = pd.DataFrame(history)
+            prob_cols = [
+                col for col in history_df.columns
+                if col not in {"elapsed_s", "label", "confidence", "mode"}
+            ]
+            if prob_cols:
+                st.line_chart(history_df.set_index("elapsed_s")[prob_cols], height=260)
+        else:
+            st.info("A evolução aparece após algumas previsões contínuas.")
+
+    with st.expander("Histórico contínuo / recuperação", expanded=False):
+        if len(monitor_records) >= 2:
+            df_monitor = pd.DataFrame(monitor_records).copy()
+            df_monitor["elapsed_s"] = pd.to_numeric(df_monitor["elapsed_s"], errors="coerce")
+            df_monitor = df_monitor.dropna(subset=["elapsed_s"]).sort_values("elapsed_s")
+
+            # Separate charts by scale/unit. A single chart hides the low-range
+            # sensors because gas resistance / CO₂ / IAQ can have very different
+            # numeric ranges.
+            recovery_groups = [
+                ("VOC / SGP41", ["voc"]),
+                ("MQ voltages", ["mq135_voltage", "mq3_voltage"]),
+                ("BME688 IAQ / bVOC / eCO₂", [
+                    "bme688_iaq",
+                    "bme688_breath_voc_equivalent",
+                    "bme688_co2_equivalent",
+                ]),
+                ("BME688 gas resistance", ["bme688_gas_resistance"]),
+                ("SCD40 CO₂", ["scd40_co2"]),
+            ]
+
+            available_groups = [
+                (title, [col for col in cols if col in df_monitor.columns])
+                for title, cols in recovery_groups
+            ]
+            available_groups = [(title, cols) for title, cols in available_groups if cols]
+
+            if available_groups:
+                st.caption("Sensores separados por escala para facilitar a leitura durante a recuperação.")
+                for idx in range(0, len(available_groups), 2):
+                    cols_ui = st.columns(2)
+                    for chart_col, (title, sensor_cols) in zip(cols_ui, available_groups[idx:idx + 2]):
+                        with chart_col:
+                            st.markdown(f"**{title}**")
+                            st.line_chart(
+                                df_monitor.set_index("elapsed_s")[sensor_cols],
+                                height=190,
+                            )
+            else:
+                st.write("Sem colunas de sensores disponíveis para o histórico.")
+        else:
+            st.write("Sem dados contínuos suficientes.")
+
+elif selected_view == "⚙️ Detalhes":
+    details_left, details_right = st.columns(2)
+
+    with details_left:
+        st.markdown("### Leituras atuais")
+        if monitor_records:
+            latest_record = monitor_records[-1]
+            sensor_df = pd.DataFrame(
+                [{"sensor": col, "value": latest_record.get(col)} for col in SENSOR_COLUMNS]
+            )
+            st.dataframe(sensor_df, width='stretch', hide_index=True, height=330)
+        else:
+            st.info("Ainda não há leituras.")
+
+    with details_right:
+        st.markdown("### Estado do ar")
+
+        if ready:
+            st.success(ready_info.get("state", "Ar limpo"))
+            st.metric("Pronto para nova amostra?", "Sim")
+        else:
+            st.warning(ready_info.get("state", "A recuperar"))
+            st.metric("Pronto para nova amostra?", "Aguarde")
+
+        st.caption(ready_info.get("reason", ""))
+
+        clean_air_prob = ready_info.get("clean_air_probability")
+        if clean_air_prob is not None:
+            st.write(f"Probabilidade de clean_air: **{clean_air_prob * 100:.1f}%**")
+
+
+    with st.expander("⚙️ Configuração avançada", expanded=False):
+        cfg_col1, cfg_col2, cfg_col3 = st.columns(3)
+
+        with cfg_col1:
+            st.write("**Leitura**")
+            st.write(f"Configuração: `{loaded_config_path or 'valores por defeito'}`")
+            st.write(f"Logo projeto: `{LOGO_PATH}`")
+            st.write(f"Logo VISTALab: `{VISTALAB_LOGO_PATH}`")
+            st.write(f"Intervalo de leitura/backend: `{read_interval_ms} ms`")
+            st.write(f"MQTT broker: `{broker}`")
+            st.write(f"MQTT port: `{port}`")
+
+        with cfg_col2:
+            st.write("**Modelos**")
+            st.write(f"Modelo usado: `{fast_model_path}`")
+            st.write(f"Mensagens no dashboard: `{MAX_DASHBOARD_MESSAGES}`")
+            st.write(f"Janela tendência clean_air: `{CLEAN_AIR_TREND_WINDOW_S:.0f} s`")
+            st.write(f"Primeira classificação: `{CLASSIFICATION_START_S:.0f} s`")
+            st.write(f"Bloqueio da classificação: `{CLASSIFICATION_LOCK_S:.0f} s`")
+            st.write(f"Fim da sessão: `{SESSION_END_S:.0f} s`")
+
+        with cfg_col3:
+            st.write("**Monitorização**")
+            st.write("Não usa recovery sessions/classes.")
+            st.write("Reamostragem interna para 1 Hz.")
+            with st.expander("Limites de recuperação", expanded=False):
+                st.json(READY_THRESHOLDS)
+
+        with st.expander("Tópicos MQTT", expanded=False):
+            for key, topic in configured_topics.items():
+                st.code(f"{key}: {topic}", language="text")
+
+    with st.expander("Dados da sessão e downloads", expanded=False):
+        if session_records:
+            df_session_records = pd.DataFrame(session_records)
+            st.write("Últimas leituras da sessão")
+            st.dataframe(df_session_records.tail(20), width='stretch')
+
+            st.download_button(
+                "Descarregar sessão em CSV",
+                data=df_session_records.to_csv(index=False).encode("utf-8"),
+                file_name="electronic_nose_session.csv",
+                mime="text/csv",
+            )
+        else:
+            st.write("Sem dados da sessão.")
+
+        if monitor_records:
+            df_monitor_records = pd.DataFrame(monitor_records)
+            st.write("Últimas leituras contínuas")
+            st.dataframe(df_monitor_records.tail(20), width='stretch')
+
+        if st.session_state.final_preview_history:
+            st.write("Histórico da pré-visualização do modelo rápido")
+            st.dataframe(pd.DataFrame(st.session_state.final_preview_history).tail(20), width='stretch')
+
+        if st.session_state.continuous_prediction_history:
+            st.write("Histórico de classificação contínua")
+            st.dataframe(pd.DataFrame(st.session_state.continuous_prediction_history).tail(20), width='stretch')
+
+
+# -------------------------------------------------------------------
+# Auto refresh
+# -------------------------------------------------------------------
+
+# Use streamlit-autorefresh instead of a manual sleep + st.rerun loop.
+# The manual loop can leave old chart sections visible in some Streamlit/browser
+# combinations when a new session starts. The component triggers clean reruns
+# without blocking the script.
+if st_autorefresh is not None:
+    st_autorefresh(
+        interval=int(read_interval_ms),
+        key=f"electronic_nose_autorefresh_{st.session_state.get('session_id', 0)}",
+    )
+else:
+    st.warning(
+        "Auto-refresh seguro não está instalado. Instala com: "
+        "`pip install streamlit-autorefresh`"
+    )
+    st.button("Atualizar agora")

@@ -1,0 +1,47 @@
+# app_config.toml
+# Coloca este ficheiro na mesma pasta do app.py.
+# Também podes usar outro caminho com:
+# APP_CONFIG=config/demo.toml python -m streamlit run app.py
+
+[app]
+read_interval_ms = 1000
+logo_path = "assets/electronic_nose_logo_highres_4k.png"
+vistalab_logo_path = "assets/vistalab_logo_padded.png"
+show_vistalab_logo = true
+show_config_warning = true
+
+[mqtt]
+broker = "10.0.0.2"
+port = 1883
+username = ""
+password = ""
+
+[models]
+# Versão atual da app: apenas um modelo, o modelo rápido.
+model_path = "models/electronic_nose_fast.joblib"
+
+[topics]
+# Se quiseres alterar tópicos, mantém os nomes das chaves iguais aos usados em src.config.
+# Exemplo:
+# voc = "electronic-nose/voc"
+# mq135_voltage = "electronic-nose/mq135_voltage"
+# mq3_voltage = "electronic-nose/mq3_voltage"
+# bme688_gas_resistance = "electronic-nose/bme688_gas_resistance"
+# bme688_iaq = "electronic-nose/bme688_iaq"
+# bme688_breath_voc_equivalent = "electronic-nose/bme688_breath_voc_equivalent"
+# bme688_co2_equivalent = "electronic-nose/bme688_co2_equivalent"
+# scd40_co2 = "electronic-nose/scd40_co2"
+
+[ui]
+# Mantém todas as classes visíveis no painel principal.
+# A recuperação contínua aparece como resumo compacto.
+max_dashboard_messages = 3
+clean_air_trend_window_s = 45.0
+clean_air_trend_deadband = 0.03
+
+[session]
+# Modelo rápido: previsão começa aos ~60 s e fica congelada aos 90 s.
+# A sessão continua até 180 s para observar recuperação da câmara.
+classification_start_s = 60.0
+classification_lock_s = 90.0
+session_end_s = 180.0

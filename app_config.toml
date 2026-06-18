@@ -1,0 +1,26 @@
+[app]
+read_interval_ms = 1000
+logo_path = "assets/electronic_nose_logo_app_light.webp"
+vistalab_logo_path = "assets/vistalab_logo_padded.png"
+show_logos = true
+
+[mqtt]
+broker = "10.0.0.2"
+port = 1883
+username = ""
+password = ""
+
+[models]
+model_path = "models/electronic_nose_fast_lemon.joblib"
+
+[session]
+preview_start_s = 0
+lock_s = 90
+end_s = 180
+clean_air_stable_s = 25
+clean_air_ready_probability = 0.75
+clean_air_almost_probability = 0.55
+
+[ui]
+max_messages = 4
+show_graphs_by_default = false
