@@ -36,7 +36,7 @@ def train(input_path: str, output_path: str, test_size: float = 0.25):
     df = df[
         ~df["label"].str.contains("recover", case=False, na=False)
         & ~df["session_id"].str.contains("recover", case=False, na=False)
-        & ~df["session_id"].str.contains("lemon", case=False, na=False)
+    #    & ~df["session_id"].str.contains("lemon", case=False, na=False)
     ].copy()
 
     # Excluir sessões com geometria antiga/fraca

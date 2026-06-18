@@ -7,3 +7,4 @@ pyserial>=3.5
 plotly>=5.18
 paho-mqtt>=2.0
 python-dotenv>=1.0
+streamlit-autorefresh>=1.0.1

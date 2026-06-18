@@ -16,6 +16,13 @@ sys.path.append(os.path.dirname(__file__))
 from config import RANDOM_STATE
 from features import make_feature_table
 
+EXCLUDED_SESSIONS = {
+    "coffee_outside_1",
+    "coffee_outside_2",
+    "coffee_outside_3",
+    "coffee_outside_4",
+    "coffee_outside_5",
+}
 
 def _can_stratify(y: pd.Series) -> bool:
     counts = y.value_counts()
@@ -29,9 +36,12 @@ def train(input_path: str, output_path: str, test_size: float = 0.25) -> None:
     df = df[
         ~df["label"].str.contains("recover", case=False, na=False)
         & ~df["session_id"].str.contains("recover", case=False, na=False)
-        & ~df["session_id"].str.contains("lemon", case=False, na=False)
+    #    & ~df["session_id"].str.contains("lemon", case=False, na=False)
     ].copy()
-    
+
+    # Excluir sessões com geometria antiga/fraca
+    df = df[~df["session_id"].isin(EXCLUDED_SESSIONS)].copy()
+
     if "label" not in df.columns:
         raise ValueError("O CSV precisa de uma coluna 'label'.")
     if "session_id" not in df.columns:
